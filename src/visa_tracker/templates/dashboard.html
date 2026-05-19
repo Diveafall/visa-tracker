@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>F2B Visa Tracker — Armenia</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#0f1115; --panel:#161a22; --border:#242a36; --text:#e8ecf3;
+          --muted:#8a93a6; --accent:#5aa9ff; --accent2:#ffb86b; --good:#4ade80; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:var(--bg); color:var(--text); line-height:1.5; }
+  .wrap { max-width:1100px; margin:0 auto; padding:32px 24px 80px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin-bottom:24px; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-bottom:24px; }
+  .kpi { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+  .kpi .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  .kpi .value { font-size:20px; font-weight:600; margin-top:4px; }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:20px; margin-bottom:20px; }
+  .panel h2 { margin:0 0 12px; font-size:18px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); }
+  th { color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  td.num { font-variant-numeric:tabular-nums; }
+  .chart-wrap { position:relative; height:380px; }
+  .footnote { color:var(--muted); font-size:12px; margin-top:16px; }
+  .delta-pos { color:var(--good); }
+  .delta-neg { color:#f87171; }
+  .delta-zero { color:var(--muted); }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>F2B Visa Tracker — Armenia</h1>
+  <div class="sub">
+    Priority date: <strong>{{ priority_date_display }}</strong>
+    {% if last_check %}· Last checked: {{ last_check }}{% endif %}
+  </div>
+
+  <div id="kpis" class="kpis"></div>
+
+  <div class="panel">
+    <h2>Cutoff date over time</h2>
+    <div class="chart-wrap"><canvas id="trendChart"></canvas></div>
+    <div class="footnote">Dashed line = your priority date.</div>
+  </div>
+
+  <div class="panel">
+    <h2>Projection for your priority date</h2>
+    <div id="projection"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Month-by-month history</h2>
+    <table id="dataTable">
+      <thead>
+        <tr><th>Bulletin</th><th>Final Action</th><th>Δ days</th><th>Dates for Filing</th><th>Δ days</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="footnote">
+    Source:
+    <a href="https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin.html">travel.state.gov</a>
+  </div>
+</div>
+
+<script id="payload" type="application/json">{{ {"bulletins": bulletins, "priority_date": priority_date, "projection": projection} | tojson }}</script>
+<script>
+  const payload = JSON.parse(document.getElementById("payload").textContent);
+  const data = payload.bulletins.slice().sort((a,b) => a.bulletin_month.localeCompare(b.bulletin_month));
+  const pdISO = payload.priority_date;
+
+  // KPIs
+  const latest = data[data.length - 1];
+  const prev = data[data.length - 2] || null;
+  const dayDelta = (a,b) => Math.round((new Date(b) - new Date(a)) / 86400000);
+  const fmt = iso => iso ? new Date(iso).toLocaleDateString("en-US",{day:"2-digit",month:"short",year:"numeric"}) : "—";
+  const kpis = document.getElementById("kpis");
+  const gapFinal = latest.final_action_date ? Math.round((new Date(pdISO) - new Date(latest.final_action_date))/86400000) : null;
+  const gapFiling = latest.dates_for_filing ? Math.round((new Date(pdISO) - new Date(latest.dates_for_filing))/86400000) : null;
+  function card(label, value, sub) {
+    return `<div class="kpi"><div class="label">${label}</div><div class="value">${value}</div><div class="footnote">${sub||""}</div></div>`;
+  }
+  const dF = prev && latest.final_action_date && prev.final_action_date ? dayDelta(prev.final_action_date, latest.final_action_date) : null;
+  const dD = prev && latest.dates_for_filing && prev.dates_for_filing ? dayDelta(prev.dates_for_filing, latest.dates_for_filing) : null;
+  kpis.innerHTML = [
+    card("Latest Final Action", fmt(latest.final_action_date), dF !== null ? `${dF >= 0 ? "+" : ""}${dF} days vs prev` : ""),
+    card("Latest Dates for Filing", fmt(latest.dates_for_filing), dD !== null ? `${dD >= 0 ? "+" : ""}${dD} days vs prev` : ""),
+    card("Gap to Final Action", gapFinal !== null ? `${(gapFinal/30).toFixed(1)} months` : "—", "behind your PD"),
+    card("Gap to Filing", gapFiling !== null ? `${(gapFiling/30).toFixed(1)} months` : "—", "behind your PD"),
+  ].join("");
+
+  // Projection
+  const proj = payload.projection;
+  const projDiv = document.getElementById("projection");
+  function rng(r) { return r ? `${fmt(r[0])} → ${fmt(r[1])}` : "—"; }
+  projDiv.innerHTML = `
+    <div>Filing chart current: <strong>${proj.pd_is_current_filing ? "✅ already current" : rng(proj.filing_eta_range)}</strong></div>
+    <div>Final Action current: <strong>${proj.pd_is_current_final ? "✅ already current" : rng(proj.final_action_eta_range)}</strong></div>
+    <div class="footnote">Pace: ${proj.days_per_month_final_recent.toFixed(0)} d/mo (recent 3), ${proj.days_per_month_final_year.toFixed(0)} d/mo (last 12).</div>
+  `;
+
+  // Table (newest first)
+  const tbody = document.querySelector("#dataTable tbody");
+  const dataNewestFirst = data.slice().reverse();
+  dataNewestFirst.forEach((row, i) => {
+    const nextRow = dataNewestFirst[i+1]; // older
+    const fa = row.final_action_date && nextRow && nextRow.final_action_date ? dayDelta(nextRow.final_action_date, row.final_action_date) : null;
+    const df = row.dates_for_filing && nextRow && nextRow.dates_for_filing ? dayDelta(nextRow.dates_for_filing, row.dates_for_filing) : null;
+    const cls = v => v == null ? "" : (v > 0 ? "delta-pos" : v < 0 ? "delta-neg" : "delta-zero");
+    const txt = v => v == null ? "—" : (v > 0 ? `+${v}` : `${v}`);
+    tbody.insertAdjacentHTML("beforeend", `<tr>
+      <td>${row.bulletin_month}</td>
+      <td class="num">${fmt(row.final_action_date)}</td>
+      <td class="num ${cls(fa)}">${txt(fa)}</td>
+      <td class="num">${fmt(row.dates_for_filing)}</td>
+      <td class="num ${cls(df)}">${txt(df)}</td>
+    </tr>`);
+  });
+
+  // Chart
+  const ctx = document.getElementById("trendChart").getContext("2d");
+  new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: data.map(d => d.bulletin_month),
+      datasets: [
+        { label: "Final Action", data: data.map(d => d.final_action_date ? new Date(d.final_action_date).getTime() : null),
+          borderColor: "#5aa9ff", backgroundColor: "rgba(90,169,255,0.15)", tension:0.25, pointRadius:4, fill:true },
+        { label: "Dates for Filing", data: data.map(d => d.dates_for_filing ? new Date(d.dates_for_filing).getTime() : null),
+          borderColor: "#ffb86b", backgroundColor: "rgba(255,184,107,0.10)", tension:0.25, pointRadius:4, fill:false },
+        { label: "Your PD", data: data.map(_ => new Date(pdISO).getTime()),
+          borderColor: "#4ade80", borderDash: [6,4], pointRadius:0, fill:false }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: "#e8ecf3" } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${new Date(ctx.parsed.y).toLocaleDateString("en-US",{day:"2-digit",month:"short",year:"numeric"})}` } }
+      },
+      scales: {
+        x: { ticks: { color: "#8a93a6" }, grid: { color: "#242a36" } },
+        y: { type: "linear", ticks: { color: "#8a93a6", callback: v => new Date(v).toLocaleDateString("en-US",{month:"short",year:"numeric"}) }, grid: { color: "#242a36" } }
+      }
+    }
+  });
+</script>
+</body>
+</html>
