@@ -97,6 +97,15 @@ class Notifier:
         await self.sender(text)
         self.db.mark_notification_sent(event_kind, bulletin_month)
 
+    async def handle_parser_broken(self, bulletin_month: str, detail: str) -> None:
+        msg = (
+            "⚠️ visa-tracker: parser failed\n\n"
+            f"Bulletin: {bulletin_month}\n"
+            f"Detail: {detail}\n\n"
+            "Inspect the bulletin page and update the parser."
+        )
+        await self._send_once("parser_broken", bulletin_month, msg)
+
     async def handle_new_bulletin(self, new: BulletinRow, prev: BulletinRow | None) -> None:
         msg = render_new_bulletin_message(new, prev, self.priority_date)
         await self._send_once("new_bulletin", new.bulletin_month, msg)

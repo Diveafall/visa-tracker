@@ -1,11 +1,23 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin
+import httpx
+import logging
 
 from bs4 import BeautifulSoup, Tag
 
 from visa_tracker.parsing import parse_visa_date
+
+if TYPE_CHECKING:
+    from visa_tracker.db import Database
+
+log = logging.getLogger(__name__)
+
+LISTING_URL = "https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin.html"
+USER_AGENT = "visa-tracker/1.0 (+personal use)"
+HTTP_TIMEOUT = 20.0
 
 
 @dataclass(frozen=True)
@@ -87,6 +99,57 @@ def _any_preceding_heading_matches(table: Tag, label_lower: str) -> bool:
 
 def _cell_text(cell: Tag) -> str:
     return cell.get_text(" ", strip=True)
+
+
+@dataclass
+class ScrapeResult:
+    new_bulletin_months: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+class BulletinScraper:
+    def __init__(self, *, db: "Database", notifier):
+        self.db = db
+        self.notifier = notifier
+
+    async def check_for_new_bulletins(self) -> ScrapeResult:
+        result = ScrapeResult()
+        try:
+            async with httpx.AsyncClient(
+                timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}
+            ) as client:
+                listing_html = (await client.get(LISTING_URL)).text
+                available = list_available_bulletins(listing_html, base_url=LISTING_URL)
+                known = set(self.db.all_bulletin_months())
+                new_links = [b for b in available if b.bulletin_month not in known]
+                # process oldest-first so notifications fire in order
+                for link in sorted(new_links, key=lambda b: b.bulletin_month):
+                    bulletin_html = (await client.get(link.url)).text
+                    try:
+                        parsed = parse_bulletin(bulletin_html)
+                    except ValueError as e:
+                        log.exception("parser failed for %s", link.url)
+                        self.db.log_scrape_run(status="error",
+                                               detail=f"parser_broken: {e}",
+                                               bulletin_month=link.bulletin_month)
+                        await self.notifier.handle_parser_broken(
+                            link.bulletin_month, str(e))
+                        continue
+                    prev = self.db.previous_bulletin(link.bulletin_month)
+                    self.db.insert_bulletin(link.bulletin_month, parsed,
+                                            link.url, simulated=False)
+                    new_row = self.db.get_bulletin(link.bulletin_month)
+                    await self.notifier.handle_new_bulletin(new_row, prev)
+                    result.new_bulletin_months.append(link.bulletin_month)
+                    self.db.log_scrape_run(status="new_bulletin",
+                                           bulletin_month=link.bulletin_month)
+            if not result.new_bulletin_months:
+                self.db.log_scrape_run(status="no_change")
+        except Exception as e:
+            log.exception("scrape failed")
+            result.error = str(e)
+            self.db.log_scrape_run(status="error", detail=str(e))
+        return result
 
 
 _HREF_RE = re.compile(r"visa-bulletin-for-([a-z]+)-(\d{4})\.html", re.IGNORECASE)
