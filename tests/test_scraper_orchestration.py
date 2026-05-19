@@ -92,6 +92,50 @@ async def test_network_error_logs_and_does_not_raise(tmp_path):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_detects_bulletin_amendment(tmp_path):
+    """If an existing bulletin's dates change on refetch, fire amended-bulletin alert."""
+    listing_html = """<html><body><a href="/visa-bulletin-for-june-2026.html">Jun 2026</a></body></html>"""
+    # First version of the bulletin
+    first_html = (FIXTURES / "bulletin-june-2026.html").read_text(encoding="utf-8")
+
+    db = Database(str(tmp_path / "t.db"))
+    db.init_schema()
+    sender = RecordingSender()
+    notifier = Notifier(db=db, sender=sender, priority_date=date(2018, 7, 3))
+    scraper = BulletinScraper(db=db, notifier=notifier)
+
+    # First scrape: bulletin is new, gets inserted
+    respx.get(
+        "https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin.html"
+    ).mock(return_value=httpx.Response(200, text=listing_html))
+    respx.get(url__regex=r".*visa-bulletin-for-june-2026\.html$").mock(
+        return_value=httpx.Response(200, text=first_html))
+
+    await scraper.check_for_new_bulletins()
+    sender.sent.clear()
+
+    # Now simulate an amendment: same month, different parsed dates
+    # We do this by directly editing the DB to a "stale" version, then re-scraping.
+    from visa_tracker.scraper import ParsedBulletin
+    db.insert_bulletin(
+        "2026-06",
+        ParsedBulletin(
+            final_action_date=date(2017, 1, 1),  # different
+            dates_for_filing=date(2017, 6, 1),    # different
+            raw_final_action="01JAN17",
+            raw_dates_filing="01JUN17",
+        ),
+        source_url="https://example.com/2026-06",
+        simulated=False,
+    )
+
+    # Re-scrape: should detect amendment (current HTML differs from stale DB row)
+    await scraper.check_for_new_bulletins()
+    assert any("Bulletin Amended" in m for m in sender.sent)
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_ignores_bulletins_older_than_min(tmp_path):
     """Old bulletins (pre-2025) should be filtered out, never scraped or alerted."""
     listing_html = """

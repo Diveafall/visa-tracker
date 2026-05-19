@@ -78,10 +78,14 @@
   const latest = data[data.length - 1];
   const prev = data[data.length - 2] || null;
   const dayDelta = (a,b) => Math.round((new Date(b) - new Date(a)) / 86400000);
-  const fmt = iso => iso ? new Date(iso).toLocaleDateString("en-US",{day:"2-digit",month:"short",year:"numeric"}) : "—";
+  const fmt = iso => {
+    if (!iso) return "—";
+    if (iso === "C") return "Current";
+    return new Date(iso).toLocaleDateString("en-US",{day:"2-digit",month:"short",year:"numeric"});
+  };
   const kpis = document.getElementById("kpis");
-  const gapFinal = latest.final_action_date ? Math.round((new Date(pdISO) - new Date(latest.final_action_date))/86400000) : null;
-  const gapFiling = latest.dates_for_filing ? Math.round((new Date(pdISO) - new Date(latest.dates_for_filing))/86400000) : null;
+  const gapFinal = latest.final_action_date && latest.final_action_date !== "C" ? Math.round((new Date(pdISO) - new Date(latest.final_action_date))/86400000) : null;
+  const gapFiling = latest.dates_for_filing && latest.dates_for_filing !== "C" ? Math.round((new Date(pdISO) - new Date(latest.dates_for_filing))/86400000) : null;
   function card(label, value, sub) {
     return `<div class="kpi"><div class="label">${label}</div><div class="value">${value}</div><div class="footnote">${sub||""}</div></div>`;
   }
@@ -109,8 +113,8 @@
   const dataNewestFirst = data.slice().reverse();
   dataNewestFirst.forEach((row, i) => {
     const nextRow = dataNewestFirst[i+1]; // older
-    const fa = row.final_action_date && nextRow && nextRow.final_action_date ? dayDelta(nextRow.final_action_date, row.final_action_date) : null;
-    const df = row.dates_for_filing && nextRow && nextRow.dates_for_filing ? dayDelta(nextRow.dates_for_filing, row.dates_for_filing) : null;
+    const fa = row.final_action_date && row.final_action_date !== "C" && nextRow && nextRow.final_action_date && nextRow.final_action_date !== "C" ? dayDelta(nextRow.final_action_date, row.final_action_date) : null;
+    const df = row.dates_for_filing && row.dates_for_filing !== "C" && nextRow && nextRow.dates_for_filing && nextRow.dates_for_filing !== "C" ? dayDelta(nextRow.dates_for_filing, row.dates_for_filing) : null;
     const cls = v => v == null ? "" : (v > 0 ? "delta-pos" : v < 0 ? "delta-neg" : "delta-zero");
     const txt = v => v == null ? "—" : (v > 0 ? `+${v}` : `${v}`);
     tbody.insertAdjacentHTML("beforeend", `<tr>
@@ -129,9 +133,9 @@
     data: {
       labels: data.map(d => d.bulletin_month),
       datasets: [
-        { label: "Final Action", data: data.map(d => d.final_action_date ? new Date(d.final_action_date).getTime() : null),
+        { label: "Final Action", data: data.map(d => d.final_action_date && d.final_action_date !== "C" ? new Date(d.final_action_date).getTime() : null),
           borderColor: "#5aa9ff", backgroundColor: "rgba(90,169,255,0.15)", tension:0.25, pointRadius:4, fill:true },
-        { label: "Dates for Filing", data: data.map(d => d.dates_for_filing ? new Date(d.dates_for_filing).getTime() : null),
+        { label: "Dates for Filing", data: data.map(d => d.dates_for_filing && d.dates_for_filing !== "C" ? new Date(d.dates_for_filing).getTime() : null),
           borderColor: "#ffb86b", backgroundColor: "rgba(255,184,107,0.10)", tension:0.25, pointRadius:4, fill:false },
         { label: "Your PD", data: data.map(_ => new Date(pdISO).getTime()),
           borderColor: "#4ade80", borderDash: [6,4], pointRadius:0, fill:false }

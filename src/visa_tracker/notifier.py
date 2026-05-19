@@ -1,10 +1,14 @@
 from __future__ import annotations
+import logging
 from datetime import date
 from typing import Awaitable, Callable
 
 import httpx
 
 from visa_tracker.db import Database, BulletinRow
+from visa_tracker.parsing import CURRENT_SENTINEL
+
+log = logging.getLogger(__name__)
 
 Sender = Callable[[str], Awaitable[None]]
 
@@ -15,6 +19,8 @@ _MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
 def _fmt_date(d: date | None) -> str:
     if d is None:
         return "U (unavailable)"
+    if d == CURRENT_SENTINEL:
+        return "C (Current)"
     return d.strftime("%d-%b-%Y").upper()
 
 
@@ -94,7 +100,17 @@ class Notifier:
     async def _send_once(self, event_kind: str, bulletin_month: str, text: str) -> None:
         if self.db.notification_already_sent(event_kind, bulletin_month):
             return
-        await self.sender(text)
+        try:
+            await self.sender(text)
+        except httpx.HTTPStatusError as e:
+            if 400 <= e.response.status_code < 500:
+                log.warning(
+                    "telegram 4xx for (%s, %s): %d %s — marking sent to stop retry loop",
+                    event_kind, bulletin_month, e.response.status_code, e.response.text[:200],
+                )
+                self.db.mark_notification_sent(event_kind, bulletin_month)
+                return
+            raise
         self.db.mark_notification_sent(event_kind, bulletin_month)
 
     async def handle_parser_broken(self, bulletin_month: str, detail: str) -> None:
@@ -105,6 +121,19 @@ class Notifier:
             "Inspect the bulletin page and update the parser."
         )
         await self._send_once("parser_broken", bulletin_month, msg)
+
+    async def handle_amended_bulletin(self, new: BulletinRow, prev: BulletinRow | None,
+                                       stale: BulletinRow) -> None:
+        msg = (
+            f"📝 Bulletin Amended: {_month_name(new.bulletin_month)}\n\n"
+            f"F2B — All Other (Armenia)\n"
+            f"  Final Action: {_fmt_date(stale.final_action_date)} → "
+            f"{_fmt_date(new.final_action_date)}\n"
+            f"  Dates Filing: {_fmt_date(stale.dates_for_filing)} → "
+            f"{_fmt_date(new.dates_for_filing)}\n\n"
+            f"🔗 {new.source_url}"
+        )
+        await self._send_once("amended_bulletin", new.bulletin_month, msg)
 
     async def handle_new_bulletin(self, new: BulletinRow, prev: BulletinRow | None) -> None:
         msg = render_new_bulletin_message(new, prev, self.priority_date)

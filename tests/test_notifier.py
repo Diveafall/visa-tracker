@@ -5,6 +5,14 @@ from visa_tracker.notifier import Notifier, render_new_bulletin_message, render_
 from visa_tracker.scraper import ParsedBulletin
 
 
+def test_fmt_date_renders_current_sentinel():
+    from visa_tracker.notifier import _fmt_date
+    from visa_tracker.parsing import CURRENT_SENTINEL
+    assert _fmt_date(CURRENT_SENTINEL) == "C (Current)"
+    assert _fmt_date(None) == "U (unavailable)"
+    assert _fmt_date(date(2018, 7, 3)) == "03-JUL-2018"
+
+
 def _row(month: str, final: date, filing: date) -> BulletinRow:
     return BulletinRow(
         bulletin_month=month, final_action_date=final, dates_for_filing=filing,
@@ -77,6 +85,40 @@ async def test_notifier_does_not_mark_on_send_failure(tmp_path):
     notifier = Notifier(db=db, sender=sender, priority_date=date(2018, 7, 3))
     new = _row("2026-07", date(2017, 10, 22), date(2018, 4, 15))
     with pytest.raises(RuntimeError):
+        await notifier.handle_new_bulletin(new, prev=None)
+    assert not db.notification_already_sent("new_bulletin", "2026-07")
+
+
+@pytest.mark.asyncio
+async def test_notifier_marks_sent_on_4xx_to_stop_retry(tmp_path):
+    import httpx
+    db = Database(str(tmp_path / "n.db"))
+    db.init_schema()
+
+    fake_response = httpx.Response(401, text="Unauthorized")
+    fake_request = httpx.Request("POST", "https://api.telegram.org/")
+    err = httpx.HTTPStatusError("4xx", request=fake_request, response=fake_response)
+    sender = FakeSender(fail_with=err)
+    notifier = Notifier(db=db, sender=sender, priority_date=date(2018, 7, 3))
+    new = _row("2026-07", date(2017, 10, 22), date(2018, 4, 15))
+    # Should not raise — 4xx is terminal, marks sent
+    await notifier.handle_new_bulletin(new, prev=None)
+    assert db.notification_already_sent("new_bulletin", "2026-07")
+
+
+@pytest.mark.asyncio
+async def test_notifier_does_not_mark_on_5xx(tmp_path):
+    import httpx
+    db = Database(str(tmp_path / "n.db"))
+    db.init_schema()
+
+    fake_response = httpx.Response(500, text="Server Error")
+    fake_request = httpx.Request("POST", "https://api.telegram.org/")
+    err = httpx.HTTPStatusError("5xx", request=fake_request, response=fake_response)
+    sender = FakeSender(fail_with=err)
+    notifier = Notifier(db=db, sender=sender, priority_date=date(2018, 7, 3))
+    new = _row("2026-07", date(2017, 10, 22), date(2018, 4, 15))
+    with pytest.raises(httpx.HTTPStatusError):
         await notifier.handle_new_bulletin(new, prev=None)
     assert not db.notification_already_sent("new_bulletin", "2026-07")
 

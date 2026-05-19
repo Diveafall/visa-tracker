@@ -116,6 +116,7 @@ class BulletinScraper:
     async def check_for_new_bulletins(self) -> ScrapeResult:
         result = ScrapeResult()
         try:
+            amended_count = 0
             async with httpx.AsyncClient(
                 timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT}
             ) as client:
@@ -148,7 +149,40 @@ class BulletinScraper:
                     result.new_bulletin_months.append(link.bulletin_month)
                     self.db.log_scrape_run(status="new_bulletin",
                                            bulletin_month=link.bulletin_month)
-            if not result.new_bulletin_months:
+
+                # After processing all new bulletins, also re-check the most recent known
+                # bulletin for late State-Dept corrections (amendments).
+                latest_known = self.db.all_bulletin_months()
+                if latest_known:
+                    latest_month = max(latest_known)
+                    # find the URL for this month in available
+                    latest_link = next(
+                        (b for b in available if b.bulletin_month == latest_month), None
+                    )
+                    if latest_link is not None:
+                        bulletin_html = (await client.get(latest_link.url)).text
+                        try:
+                            parsed = parse_bulletin(bulletin_html)
+                        except ValueError:
+                            pass  # parser_broken already handled above for genuine new ones
+                        else:
+                            existing = self.db.get_bulletin(latest_month)
+                            if existing and (
+                                parsed.final_action_date != existing.final_action_date
+                                or parsed.dates_for_filing != existing.dates_for_filing
+                            ):
+                                # amended — update and notify
+                                prev = self.db.previous_bulletin(latest_month)
+                                self.db.insert_bulletin(latest_month, parsed,
+                                                        latest_link.url, simulated=False)
+                                new_row = self.db.get_bulletin(latest_month)
+                                await self.notifier.handle_amended_bulletin(
+                                    new_row, prev, existing)
+                                self.db.log_scrape_run(status="amended",
+                                                       bulletin_month=latest_month)
+                                amended_count += 1
+
+            if not result.new_bulletin_months and amended_count == 0:
                 self.db.log_scrape_run(status="no_change")
         except Exception as e:
             log.exception("scrape failed")
