@@ -4,7 +4,7 @@ import pytest
 import respx
 import httpx
 from visa_tracker.db import Database
-from visa_tracker.scraper import BulletinScraper
+from visa_tracker.scraper import BulletinScraper, MIN_BULLETIN_MONTH
 from visa_tracker.notifier import Notifier
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -88,3 +88,35 @@ async def test_network_error_logs_and_does_not_raise(tmp_path):
     assert result.error is not None
     runs = db.recent_scrape_runs(limit=1)
     assert runs[0].status == "error"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_ignores_bulletins_older_than_min(tmp_path):
+    """Old bulletins (pre-2025) should be filtered out, never scraped or alerted."""
+    listing_html = """
+    <html><body>
+    <a href="/visa-bulletin-for-january-2024.html">Jan 2024</a>
+    <a href="/visa-bulletin-for-march-2010.html">Mar 2010</a>
+    <a href="/visa-bulletin-for-june-2026.html">Jun 2026</a>
+    </body></html>
+    """
+    bulletin_html = (FIXTURES / "bulletin-june-2026.html").read_text(encoding="utf-8")
+
+    respx.get(
+        "https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin.html"
+    ).mock(return_value=httpx.Response(200, text=listing_html))
+    respx.get(url__regex=r".*visa-bulletin-for-june-2026\.html$").mock(
+        return_value=httpx.Response(200, text=bulletin_html))
+
+    db = Database(str(tmp_path / "t.db"))
+    db.init_schema()
+    sender = RecordingSender()
+    notifier = Notifier(db=db, sender=sender, priority_date=date(2018, 7, 3))
+    scraper = BulletinScraper(db=db, notifier=notifier)
+
+    result = await scraper.check_for_new_bulletins()
+    # Only June 2026 should be discovered; the 2024 and 2010 bulletins are below MIN_BULLETIN_MONTH
+    assert result.new_bulletin_months == ["2026-06"]
+    assert "2024-01" not in db.all_bulletin_months()
+    assert "2010-03" not in db.all_bulletin_months()

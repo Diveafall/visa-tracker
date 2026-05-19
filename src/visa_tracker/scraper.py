@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 LISTING_URL = "https://travel.state.gov/content/travel/en/legal/visa-law0/visa-bulletin.html"
 USER_AGENT = "visa-tracker/1.0 (+personal use)"
 HTTP_TIMEOUT = 20.0
+MIN_BULLETIN_MONTH = "2025-01"  # ignore older bulletins (parser not designed for them)
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,11 @@ class BulletinScraper:
                 listing_html = (await client.get(LISTING_URL)).text
                 available = list_available_bulletins(listing_html, base_url=LISTING_URL)
                 known = set(self.db.all_bulletin_months())
-                new_links = [b for b in available if b.bulletin_month not in known]
+                new_links = [
+                    b for b in available
+                    if b.bulletin_month not in known
+                    and b.bulletin_month >= MIN_BULLETIN_MONTH
+                ]
                 # process oldest-first so notifications fire in order
                 for link in sorted(new_links, key=lambda b: b.bulletin_month):
                     bulletin_html = (await client.get(link.url)).text
