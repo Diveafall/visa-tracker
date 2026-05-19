@@ -128,6 +128,9 @@ async def cmd_test_telegram(args, settings: Settings):
 
 
 def _seed_path() -> Path:
+    container_path = Path("/app/seed.json")
+    if container_path.exists():
+        return container_path
     return Path(__file__).resolve().parents[2] / "seed.json"
 
 
