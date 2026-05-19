@@ -1,8 +1,17 @@
+import re
 from dataclasses import dataclass
 from datetime import date
+from urllib.parse import urljoin
+
 from bs4 import BeautifulSoup, Tag
 
 from visa_tracker.parsing import parse_visa_date
+
+
+@dataclass(frozen=True)
+class BulletinLink:
+    bulletin_month: str   # 'YYYY-MM'
+    url: str
 
 
 @dataclass(frozen=True)
@@ -78,3 +87,30 @@ def _any_preceding_heading_matches(table: Tag, label_lower: str) -> bool:
 
 def _cell_text(cell: Tag) -> str:
     return cell.get_text(" ", strip=True)
+
+
+_HREF_RE = re.compile(r"visa-bulletin-for-([a-z]+)-(\d{4})\.html", re.IGNORECASE)
+_MONTH_NUM = {m.lower(): i + 1 for i, m in enumerate(
+    ["january", "february", "march", "april", "may", "june",
+     "july", "august", "september", "october", "november", "december"])}
+
+
+def list_available_bulletins(html: str, *, base_url: str) -> list[BulletinLink]:
+    soup = BeautifulSoup(html, "html.parser")
+    seen: dict[str, BulletinLink] = {}
+    for a in soup.find_all("a", href=True):
+        match = _HREF_RE.search(a["href"])
+        if not match:
+            continue
+        month_word, year_str = match.group(1).lower(), match.group(2)
+        month_num = _MONTH_NUM.get(month_word)
+        if month_num is None:
+            continue
+        bulletin_month = f"{year_str}-{month_num:02d}"
+        if bulletin_month in seen:
+            continue
+        seen[bulletin_month] = BulletinLink(
+            bulletin_month=bulletin_month,
+            url=urljoin(base_url, a["href"]),
+        )
+    return sorted(seen.values(), key=lambda b: b.bulletin_month, reverse=True)
