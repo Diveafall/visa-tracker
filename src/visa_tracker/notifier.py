@@ -29,6 +29,22 @@ def _month_name(bulletin_month: str) -> str:
     return f"{_MONTH_NAMES[int(mo)]} {yr}"
 
 
+def _short_month(bulletin_month: str) -> str:
+    _, mo = bulletin_month.split("-")
+    return _MONTH_NAMES[int(mo)]
+
+
+def _format_chart_row(label: str, new_d: date | None, prev_d: date | None,
+                       prev_month: str | None, delta: int | None) -> str:
+    inner_parts: list[str] = []
+    if prev_month is not None and prev_d is not None:
+        inner_parts.append(f"{prev_month}: {_fmt_date(prev_d)}")
+    if delta is not None:
+        inner_parts.append(_fmt_delta(delta))
+    suffix = f"  ({', '.join(inner_parts)})" if inner_parts else ""
+    return f"  {label}: {_fmt_date(new_d)}{suffix}"
+
+
 def _delta_days(a: date | None, b: date | None) -> int | None:
     if a is None or b is None:
         return None
@@ -53,13 +69,18 @@ def render_new_bulletin_message(new: BulletinRow, prev: BulletinRow | None,
                                 new.dates_for_filing)
     gap_final = _delta_days(new.final_action_date, priority_date)
     gap_filing = _delta_days(new.dates_for_filing, priority_date)
+    prev_month = _short_month(prev.bulletin_month) if prev else None
 
     lines = [
         f"📅 New Visa Bulletin: {_month_name(new.bulletin_month)}",
         "",
         "F2B — All Other (Armenia)",
-        f"  ✅ Final Action: {_fmt_date(new.final_action_date)}  ({_fmt_delta(final_delta)})",
-        f"  📋 Dates Filing: {_fmt_date(new.dates_for_filing)}  ({_fmt_delta(filing_delta)})",
+        _format_chart_row("✅ Final Action", new.final_action_date,
+                          prev.final_action_date if prev else None,
+                          prev_month, final_delta),
+        _format_chart_row("📋 Dates Filing", new.dates_for_filing,
+                          prev.dates_for_filing if prev else None,
+                          prev_month, filing_delta),
         "",
         f"Your priority date: {_fmt_date(priority_date)}",
     ]

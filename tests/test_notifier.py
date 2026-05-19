@@ -30,6 +30,19 @@ def test_render_new_bulletin_includes_both_dates():
     assert "15-APR-2018" in msg
     assert "+30" in msg or "+30 days" in msg
     assert "03-JUL-2018" in msg
+    # Previous month name + previous value appear (new format: "June: 22-SEP-2017")
+    assert "June: 22-SEP-2017" in msg
+    assert "June: 22-MAR-2018" in msg
+
+
+def test_render_new_bulletin_without_prev_omits_prev_block():
+    new = _row("2025-07", date(2016, 10, 15), date(2017, 1, 1))
+    msg = render_new_bulletin_message(new, prev=None, priority_date=date(2018, 7, 3))
+    assert "July 2025" in msg
+    assert "15-OCT-2016" in msg
+    # No previous month reference when prev=None
+    assert "June:" not in msg
+    assert "was " not in msg
 
 
 def test_render_pd_crossed_message():
